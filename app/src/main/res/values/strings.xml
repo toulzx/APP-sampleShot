@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">sampleShot</string>
+    <string name="btn_shot">take photo</string>
+    <string name="ratio">目前的比例？</string>
+</resources>
