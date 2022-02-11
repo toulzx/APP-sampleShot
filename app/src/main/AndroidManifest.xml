@@ -9,7 +9,6 @@
         tools:ignore="ScopedStorage" />
 
     <application
-        android:requestLegacyExternalStorage="true"
         android:label="@string/app_name"
         android:allowBackup="false"
         android:icon="@mipmap/camera_retro"

@@ -16,13 +16,17 @@ import androidx.core.content.ContextCompat;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.content.ContentValues;
 import android.content.pm.PackageManager;
 import android.graphics.Matrix;
 import android.media.Image;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.provider.MediaStore;
 import android.util.Log;
 import android.util.Rational;
 import android.view.Surface;
@@ -35,10 +39,18 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Locale;
 
 import static android.content.ContentValues.TAG;
 
+/*
+ * MainActivity
+ * @date 2022/2/11
+ * @author tou
+ */
 public class TakePhotoActivity extends AppCompatActivity {
 
     private static final float DEFAULT_ASPECT_RATIO = 3.395f;
@@ -106,6 +118,7 @@ public class TakePhotoActivity extends AppCompatActivity {
     /**
      * 初始化界面
      * @return void
+     * @author tou
      *
      */
     private void setUI () {
@@ -278,6 +291,7 @@ public class TakePhotoActivity extends AppCompatActivity {
      * 裁剪并保存照片
      * @param imageCapture:
      * @return void
+     * @author tou
      *
      */
     private void saveImage(ImageCapture imageCapture) {
@@ -286,29 +300,14 @@ public class TakePhotoActivity extends AppCompatActivity {
 
         long currentTime = System.currentTimeMillis();
 
-//        /* 存放在内部存储 */
-//
-//        File externalFilesDir = getExternalFilesDir(Environment.DIRECTORY_DCIM);
-//        String storePath = externalFilesDir + File.separator + currentTime + ".jpeg";
+        /* 存放在内部存储 */
+        File externalFilesDir = getExternalFilesDir(Environment.DIRECTORY_DCIM);
+        String picName = currentTime + ".jpeg";
 
-        /* 存放在外部存储 */
-
-        File file =  new File(Environment.getExternalStorageDirectory()+ File.separator + Environment.DIRECTORY_DCIM);
-
-        String storePath = file + File.separator + "sampleShot" + File.separator  + currentTime + ".jpeg";
-
-        if (!file.exists()) {
-
-            if (!file.mkdirs()) {
-
-                Log.i(TAG, "saveImage: 创建文件夹失败！");
-                
-            }
-            
-        }
-
-        // 目前使用了外部存储地址
-        File photo = new File(storePath);
+        // 由于 Android 11+ 强制分区存储，
+        // 而目前照片保存通过 imageCapture.takePicture 实现
+        // 则暂时存放在应用内部空间
+        File photo = new File(externalFilesDir, picName);
 
         /* 对照片进行裁剪处理 */
 
@@ -323,7 +322,20 @@ public class TakePhotoActivity extends AppCompatActivity {
         imageCapture.takePicture(photo, new ImageCapture.OnImageSavedListener() {
             @Override
             public void onImageSaved(@NonNull File file) {
-                showToast("saved pictures successfully");
+                // 外部存储，从内部复制一份
+                String picName = currentTime + ".jpeg";
+                try {
+                    FileInputStream fileInputStream = new FileInputStream(file);
+                    insert2Album(fileInputStream, picName);
+                } catch (Exception e) {
+                    Log.d("test", e.getLocalizedMessage());
+                }
+                // 删除内部存储的照片
+                if (file.delete()){
+                    showToast("got it!");
+                } else {
+                    showToast("failed to delete from app's cache storage");
+                }
             }
             @Override
             public void onError(@NonNull  ImageCapture.ImageCaptureError imageCaptureError, @NonNull  String message, @Nullable Throwable cause) {
@@ -341,6 +353,7 @@ public class TakePhotoActivity extends AppCompatActivity {
      * 底部悬浮提示
      * @param msg:  提示内容
      * @return void
+     * @author tou
      *
      */
     public void showToast(String msg) {
@@ -349,5 +362,67 @@ public class TakePhotoActivity extends AppCompatActivity {
 
     }
 
+    /*
+     * 适合 Android 11 共享空间的照片存取
+     * @param inputStream:
+     * @param fileName: 需要保存到相册的图片名
+     * @date 2022/2/11 11:12
+     * @author fishforest
+     *
+     */
+    private void insert2Album(InputStream inputStream, String fileName) {
+        if (inputStream == null)
+            return;
+        ContentValues contentValues = new ContentValues();
+        // 图片名
+        contentValues.put(MediaStore.Images.ImageColumns.DISPLAY_NAME, fileName);
+        // 图片路径
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {   // >= Android 10 时，遵循分区存储策略
+            //RELATIVE_PATH 字段表示相对路径
+            String relativePath = Environment.DIRECTORY_DCIM + File.separator + "sampleShot";
+            contentValues.put(MediaStore.Images.ImageColumns.RELATIVE_PATH, relativePath);
+        } else {
+            String dstPath = Environment.getExternalStorageDirectory() + File.separator + Environment.DIRECTORY_DCIM
+                    + File.separator + "sampleShot" + File.separator + fileName;
+            //DATA 字段在 Android 10.0 之后已经废弃
+            contentValues.put(MediaStore.Images.ImageColumns.DATA, dstPath);
+        }
+        //插入相册（通过 Uri 的方式）
+        Uri duplicateUri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues);
+        //写入文件
+        write2File(duplicateUri, inputStream);
+    }
+
+    /*----------------------------------------------------------------------------------------------------------------*/
+
+    /*
+     * 文件写入
+     * @param uri: 关联着待写入的文件
+     * @param inputStream:  表示原始的文件流
+     * @date 2022/2/11 11:15
+     * @author fishforest
+     */
+    private void write2File(Uri uri, InputStream inputStream) {
+        if (uri == null || inputStream == null)
+            return;
+        try {
+            //从Uri构造输出流
+            OutputStream outputStream = getContentResolver().openOutputStream(uri);
+            byte[] in = new byte[1024];
+            int len = 0;
+            do {
+                //从输入流里读取数据
+                len = inputStream.read(in);
+                if (len != -1) {
+                    outputStream.write(in, 0, len);
+                    outputStream.flush();
+                }
+            } while (len != -1);
+            inputStream.close();
+            outputStream.close();
+        } catch (Exception e) {
+            Log.d(TAG, e.getLocalizedMessage());
+        }
+    }
 
 }
